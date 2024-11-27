@@ -4,7 +4,7 @@ Connecting With Heinrich
 To do anything but the basic app commands, you'll need a network connection with Heinrich. This can be done via ethernet in combination with SSH.
 A 15m ethernet cable is in the RL office, if you need more movement please talk to the RL team.
 
-Plug the ethernet cable into the robot and your computer. Ideally at this point you'll be disconnected from all other ethernet connections.
+Plug the ethernet cable into the robot and your computer. Ideally at this point you'll be disconnected from all other ethernet connections - Heinrich must not have any other connections, e.g. to the app!
 You should see the robot. Now assign this connection the manual IPv4 adress **192.168.123.51** and network mask **255.255.255.0**.
 At this point you should be able to run **make ping** and get a result back. Now run **make ssh** to connect to the robot's OS.
 This is the primary way to deploy policies via ROS.
