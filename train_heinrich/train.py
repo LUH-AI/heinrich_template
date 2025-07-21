@@ -1,11 +1,35 @@
+import time
+
 import hydra
-from train_heinrich.task_registry import task_registry
+import numpy as np
+from omegaconf import DictConfig
+from functools import partial
+from mighty.mighty_runners.factory import get_runner_class
+from train_heinrich.make_isaac_gym_env import make_env
 
-@hydra.main(config_path="configs", config_name="train_config")
-def train(cfg):
-    env, env_cfg = task_registry.make_env(name=cfg.task, args=cfg)
-    ppo_runner, train_cfg = task_registry.make_alg_runner(env=env, name=cfg.task, args=cfg)
-    ppo_runner.learn(num_learning_iterations=train_cfg.runner.max_iterations, init_at_random_ep_len=True)
 
-if __name__ == '__main__':
-    train()
+@hydra.main("./configs", "base", version_base=None)
+def run_mighty(cfg: DictConfig) -> None:
+    env = make_env(cfg.environment)
+    eval_env_constructor = partial(make_env, cfg.environment)
+    eval_default = cfg.n_episodes_eval
+
+    # Make runner
+    runner_cls = get_runner_class(cfg.runner)
+    runner = runner_cls(cfg, env, eval_env_constructor, eval_default)
+
+    # Execute run
+    start = time.time()
+    train_result, eval_result = runner.run()
+    end = time.time()
+
+    # Print stats
+    print("Training finished!")
+    print(
+        f"Reached a reward of {np.round(eval_result['mean_eval_reward'], decimals=2)} in {train_result['step']} steps and {np.round(end - start, decimals=2)}s."
+    )
+    return eval_result["mean_eval_reward"]
+
+
+if __name__ == "__main__":
+    run_mighty()

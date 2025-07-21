@@ -1,0 +1,21 @@
+task_name: go2_rough
+seed: 0
+num_envs: 4096
+headless: false
+sim_device: "cpu"
+test: false
+
+sim_args:
+  physics_engine: "physx"
+  use_gpu: false
+  num_subscenes: 4
+  use_gpu_pipeline: false
+  num_threads: 4
+
+task_args:  
+    terrain.num_rows: 5
+    terrain.num_cols: 5
+    terrain.curriculum: false
+    noise.add_noise: false
+    domain_rand.randomize_friction: false
+    domain_rand.push_robots: false

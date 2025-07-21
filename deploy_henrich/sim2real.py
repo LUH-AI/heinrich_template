@@ -3,21 +3,80 @@ from typing import Union
 import numpy as np
 import time
 import torch
+import yaml
 
 from unitree_sdk2py.core.channel import ChannelPublisher, ChannelFactoryInitialize
 from unitree_sdk2py.core.channel import ChannelSubscriber, ChannelFactoryInitialize
-from unitree_sdk2py.idl.default import unitree_hg_msg_dds__LowCmd_, unitree_hg_msg_dds__LowState_
-from unitree_sdk2py.idl.default import unitree_go_msg_dds__LowCmd_, unitree_go_msg_dds__LowState_
+from unitree_sdk2py.idl.default import (
+    unitree_hg_msg_dds__LowCmd_,
+    unitree_hg_msg_dds__LowState_,
+)
+from unitree_sdk2py.idl.default import (
+    unitree_go_msg_dds__LowCmd_,
+    unitree_go_msg_dds__LowState_,
+)
 from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowCmd_ as LowCmdHG
 from unitree_sdk2py.idl.unitree_go.msg.dds_ import LowCmd_ as LowCmdGo
 from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowState_ as LowStateHG
 from unitree_sdk2py.idl.unitree_go.msg.dds_ import LowState_ as LowStateGo
 from unitree_sdk2py.utils.crc import CRC
 
-from common.command_helper import create_damping_cmd, create_zero_cmd, init_cmd_hg, init_cmd_go, MotorMode
-from common.rotation_helper import get_gravity_orientation, transform_imu_data
-from common.remote_controller import RemoteController, KeyMap
-from config import Config
+from deploy_heinrich.sim2real_helpers.command_helper import (
+    create_damping_cmd,
+    create_zero_cmd,
+    init_cmd_hg,
+    init_cmd_go,
+    MotorMode,
+)
+from deploy_heinrich.sim2real_helpers.rotation_helper import (
+    get_gravity_orientation,
+    transform_imu_data,
+)
+from deploy_heinrich.sim2real_helpers.remote_controller import RemoteController, KeyMap
+
+
+class Config:
+    def __init__(self, file_path) -> None:
+        with open(file_path, "r") as f:
+            config = yaml.load(f, Loader=yaml.FullLoader)
+
+            self.control_dt = config["control_dt"]
+
+            self.msg_type = config["msg_type"]
+            self.imu_type = config["imu_type"]
+
+            self.weak_motor = []
+            if "weak_motor" in config:
+                self.weak_motor = config["weak_motor"]
+
+            self.lowcmd_topic = config["lowcmd_topic"]
+            self.lowstate_topic = config["lowstate_topic"]
+
+            self.policy_path = config["policy_path"].replace(
+                "{LEGGED_GYM_ROOT_DIR}", LEGGED_GYM_ROOT_DIR
+            )
+
+            self.leg_joint2motor_idx = config["leg_joint2motor_idx"]
+            self.kps = config["kps"]
+            self.kds = config["kds"]
+            self.default_angles = np.array(config["default_angles"], dtype=np.float32)
+
+            self.arm_waist_joint2motor_idx = config["arm_waist_joint2motor_idx"]
+            self.arm_waist_kps = config["arm_waist_kps"]
+            self.arm_waist_kds = config["arm_waist_kds"]
+            self.arm_waist_target = np.array(
+                config["arm_waist_target"], dtype=np.float32
+            )
+
+            self.ang_vel_scale = config["ang_vel_scale"]
+            self.dof_pos_scale = config["dof_pos_scale"]
+            self.dof_vel_scale = config["dof_vel_scale"]
+            self.action_scale = config["action_scale"]
+            self.cmd_scale = np.array(config["cmd_scale"], dtype=np.float32)
+            self.max_cmd = np.array(config["max_cmd"], dtype=np.float32)
+
+            self.num_actions = config["num_actions"]
+            self.num_obs = config["num_obs"]
 
 
 class Controller:
@@ -46,7 +105,9 @@ class Controller:
             self.lowcmd_publisher_ = ChannelPublisher(config.lowcmd_topic, LowCmdHG)
             self.lowcmd_publisher_.Init()
 
-            self.lowstate_subscriber = ChannelSubscriber(config.lowstate_topic, LowStateHG)
+            self.lowstate_subscriber = ChannelSubscriber(
+                config.lowstate_topic, LowStateHG
+            )
             self.lowstate_subscriber.Init(self.LowStateHgHandler, 10)
 
         elif config.msg_type == "go":
@@ -57,7 +118,9 @@ class Controller:
             self.lowcmd_publisher_ = ChannelPublisher(config.lowcmd_topic, LowCmdGo)
             self.lowcmd_publisher_.Init()
 
-            self.lowstate_subscriber = ChannelSubscriber(config.lowstate_topic, LowStateGo)
+            self.lowstate_subscriber = ChannelSubscriber(
+                config.lowstate_topic, LowStateGo
+            )
             self.lowstate_subscriber.Init(self.LowStateGoHandler, 10)
 
         else:
@@ -103,25 +166,31 @@ class Controller:
         # move time 2s
         total_time = 2
         num_step = int(total_time / self.config.control_dt)
-        
-        dof_idx = self.config.leg_joint2motor_idx + self.config.arm_waist_joint2motor_idx
+
+        dof_idx = (
+            self.config.leg_joint2motor_idx + self.config.arm_waist_joint2motor_idx
+        )
         kps = self.config.kps + self.config.arm_waist_kps
         kds = self.config.kds + self.config.arm_waist_kds
-        default_pos = np.concatenate((self.config.default_angles, self.config.arm_waist_target), axis=0)
+        default_pos = np.concatenate(
+            (self.config.default_angles, self.config.arm_waist_target), axis=0
+        )
         dof_size = len(dof_idx)
-        
+
         # record the current pos
         init_dof_pos = np.zeros(dof_size, dtype=np.float32)
         for i in range(dof_size):
             init_dof_pos[i] = self.low_state.motor_state[dof_idx[i]].q
-        
+
         # move to default pos
         for i in range(num_step):
             alpha = i / num_step
             for j in range(dof_size):
                 motor_idx = dof_idx[j]
                 target_pos = default_pos[j]
-                self.low_cmd.motor_cmd[motor_idx].q = init_dof_pos[j] * (1 - alpha) + target_pos * alpha
+                self.low_cmd.motor_cmd[motor_idx].q = (
+                    init_dof_pos[j] * (1 - alpha) + target_pos * alpha
+                )
                 self.low_cmd.motor_cmd[motor_idx].qd = 0
                 self.low_cmd.motor_cmd[motor_idx].kp = kps[j]
                 self.low_cmd.motor_cmd[motor_idx].kd = kds[j]
@@ -154,8 +223,12 @@ class Controller:
         self.counter += 1
         # Get the current joint position and velocity
         for i in range(len(self.config.leg_joint2motor_idx)):
-            self.qj[i] = self.low_state.motor_state[self.config.leg_joint2motor_idx[i]].q
-            self.dqj[i] = self.low_state.motor_state[self.config.leg_joint2motor_idx[i]].dq
+            self.qj[i] = self.low_state.motor_state[
+                self.config.leg_joint2motor_idx[i]
+            ].q
+            self.dqj[i] = self.low_state.motor_state[
+                self.config.leg_joint2motor_idx[i]
+            ].dq
 
         # imu_state quaternion: w, x, y, z
         quat = self.low_state.imu_state.quaternion
@@ -164,9 +237,18 @@ class Controller:
         if self.config.imu_type == "torso":
             # h1 and h1_2 imu is on the torso
             # imu data needs to be transformed to the pelvis frame
-            waist_yaw = self.low_state.motor_state[self.config.arm_waist_joint2motor_idx[0]].q
-            waist_yaw_omega = self.low_state.motor_state[self.config.arm_waist_joint2motor_idx[0]].dq
-            quat, ang_vel = transform_imu_data(waist_yaw=waist_yaw, waist_yaw_omega=waist_yaw_omega, imu_quat=quat, imu_omega=ang_vel)
+            waist_yaw = self.low_state.motor_state[
+                self.config.arm_waist_joint2motor_idx[0]
+            ].q
+            waist_yaw_omega = self.low_state.motor_state[
+                self.config.arm_waist_joint2motor_idx[0]
+            ].dq
+            quat, ang_vel = transform_imu_data(
+                waist_yaw=waist_yaw,
+                waist_yaw_omega=waist_yaw_omega,
+                imu_quat=quat,
+                imu_omega=ang_vel,
+            )
 
         # create observation
         gravity_orientation = get_gravity_orientation(quat)
@@ -198,9 +280,11 @@ class Controller:
         # Get the action from the policy network
         obs_tensor = torch.from_numpy(self.obs).unsqueeze(0)
         self.action = self.policy(obs_tensor).detach().numpy().squeeze()
-        
+
         # transform action to target_dof_pos
-        target_dof_pos = self.config.default_angles + self.action * self.config.action_scale
+        target_dof_pos = (
+            self.config.default_angles + self.action * self.config.action_scale
+        )
 
         # Build low cmd
         for i in range(len(self.config.leg_joint2motor_idx)):
@@ -230,7 +314,12 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument("net", type=str, help="network interface")
-    parser.add_argument("config", type=str, help="config file name in the configs folder", default="g1.yaml")
+    parser.add_argument(
+        "config",
+        type=str,
+        help="config file name in the configs folder",
+        default="g1.yaml",
+    )
     args = parser.parse_args()
 
     # Load config

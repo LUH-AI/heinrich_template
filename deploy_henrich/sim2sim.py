@@ -1,4 +1,3 @@
-"""Copied from: https://github.com/unitreerobotics/unitree_rl_gym/blob/main/deploy/deploy_mujoco/deploy_mujoco.py"""
 import time
 
 import mujoco.viewer
@@ -34,13 +33,21 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("config_file", type=str, help="config file name in the config folder")
+    parser.add_argument(
+        "config_file", type=str, help="config file name in the config folder"
+    )
     args = parser.parse_args()
     config_file = args.config_file
-    with open(f"{LEGGED_GYM_ROOT_DIR}/deploy/deploy_mujoco/configs/{config_file}", "r") as f:
+    with open(
+        f"{LEGGED_GYM_ROOT_DIR}/deploy/deploy_mujoco/configs/{config_file}", "r"
+    ) as f:
         config = yaml.load(f, Loader=yaml.FullLoader)
-        policy_path = config["policy_path"].replace("{LEGGED_GYM_ROOT_DIR}", LEGGED_GYM_ROOT_DIR)
-        xml_path = config["xml_path"].replace("{LEGGED_GYM_ROOT_DIR}", LEGGED_GYM_ROOT_DIR)
+        policy_path = config["policy_path"].replace(
+            "{LEGGED_GYM_ROOT_DIR}", LEGGED_GYM_ROOT_DIR
+        )
+        xml_path = config["xml_path"].replace(
+            "{LEGGED_GYM_ROOT_DIR}", LEGGED_GYM_ROOT_DIR
+        )
 
         simulation_duration = config["simulation_duration"]
         simulation_dt = config["simulation_dt"]
@@ -51,6 +58,7 @@ if __name__ == "__main__":
 
         default_angles = np.array(config["default_angles"], dtype=np.float32)
 
+        lin_vel_scale = config["lin_vel_scale"]
         ang_vel_scale = config["ang_vel_scale"]
         dof_pos_scale = config["dof_pos_scale"]
         dof_vel_scale = config["dof_vel_scale"]
@@ -59,7 +67,7 @@ if __name__ == "__main__":
 
         num_actions = config["num_actions"]
         num_obs = config["num_obs"]
-        
+
         cmd = np.array(config["cmd_init"], dtype=np.float32)
 
     # define context variables
@@ -82,7 +90,9 @@ if __name__ == "__main__":
         start = time.time()
         while viewer.is_running() and time.time() - start < simulation_duration:
             step_start = time.time()
-            tau = pd_control(target_dof_pos, d.qpos[7:], kps, np.zeros_like(kds), d.qvel[6:], kds)
+            tau = pd_control(
+                target_dof_pos, d.qpos[7:], kps, np.zeros_like(kds), d.qvel[6:], kds
+            )
             d.ctrl[:] = tau
             # mj_step can be replaced with code that also evaluates
             # a policy and applies a control signal before stepping the physics.
@@ -96,26 +106,23 @@ if __name__ == "__main__":
                 qj = d.qpos[7:]
                 dqj = d.qvel[6:]
                 quat = d.qpos[3:7]
-                omega = d.qvel[3:6]
+                lin_vel = d.qvel[:3]
+                ang_vel = d.qvel[3:6]
 
                 qj = (qj - default_angles) * dof_pos_scale
+
                 dqj = dqj * dof_vel_scale
                 gravity_orientation = get_gravity_orientation(quat)
-                omega = omega * ang_vel_scale
+                lin_vel = lin_vel * lin_vel_scale
+                ang_vel = ang_vel * ang_vel_scale
 
-                period = 0.8
-                count = counter * simulation_dt
-                phase = count % period / period
-                sin_phase = np.sin(2 * np.pi * phase)
-                cos_phase = np.cos(2 * np.pi * phase)
-
-                obs[:3] = omega
-                obs[3:6] = gravity_orientation
-                obs[6:9] = cmd * cmd_scale
-                obs[9 : 9 + num_actions] = qj
-                obs[9 + num_actions : 9 + 2 * num_actions] = dqj
-                obs[9 + 2 * num_actions : 9 + 3 * num_actions] = action
-                obs[9 + 3 * num_actions : 9 + 3 * num_actions + 2] = np.array([sin_phase, cos_phase])
+                obs[:3] = lin_vel
+                obs[3:6] = ang_vel
+                obs[6:9] = gravity_orientation
+                obs[9:12] = cmd * cmd_scale
+                obs[12 : 12 + num_actions] = qj
+                obs[12 + num_actions : 12 + 2 * num_actions] = dqj
+                obs[12 + 2 * num_actions : 12 + 3 * num_actions] = action
                 obs_tensor = torch.from_numpy(obs).unsqueeze(0)
                 # policy inference
                 action = policy(obs_tensor).detach().numpy().squeeze()
